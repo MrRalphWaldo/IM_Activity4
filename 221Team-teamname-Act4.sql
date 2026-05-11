@@ -8,7 +8,9 @@
 DROP DATABASE IF EXISTS equipments;
 
 -- Create database
-CREATE DATABASE equipments;
+CREATE DATABASE equipments
+    DEFAULT CHARACTER SET utf8mb4
+    DEFAULT COLLATE utf8mb4_0900_ai_ci;
 USE equipments;
 
 -- ============================================================================
@@ -21,13 +23,14 @@ CREATE TABLE USERS (
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
     email VARCHAR(100) NOT NULL UNIQUE,
-    phone VARCHAR(20),
+    phone VARCHAR(11),
     role ENUM('CUSTODIAN', 'BORROWER', 'ADMIN', 'FACULTY') NOT NULL,
     status ENUM('ACTIVE', 'INACTIVE') DEFAULT 'ACTIVE',
     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_username_length CHECK (CHAR_LENGTH(username) >= 3),
-    CONSTRAINT chk_email_format CHECK (email LIKE '%@%.%')
-);
+    CONSTRAINT chk_email_format CHECK (email LIKE '%@%.%'),
+    CONSTRAINT chk_phone_length CHECK (phone IS NULL OR CHAR_LENGTH(phone) = 11)
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: STUDENTS (Extract from SLU database or manual entry)
@@ -40,7 +43,7 @@ CREATE TABLE STUDENTS (
     year_level INT,
     FOREIGN KEY (user_id) REFERENCES USERS(user_id) ON DELETE CASCADE,
     CONSTRAINT chk_year_level CHECK (year_level BETWEEN 1 AND 4)
-);
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: CATEGORIES (Equipment categories)
@@ -50,7 +53,7 @@ CREATE TABLE CATEGORIES (
     category_name VARCHAR(100) NOT NULL UNIQUE,
     description TEXT,
     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: EQUIPMENT (Lab equipment and accessories)
@@ -67,8 +70,9 @@ CREATE TABLE EQUIPMENT (
     location VARCHAR(100),
     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (category_id) REFERENCES CATEGORIES(category_id) ON DELETE RESTRICT,
-    CONSTRAINT chk_value CHECK (value > 0)
-);
+    CONSTRAINT chk_value CHECK (value > 0),
+    CONSTRAINT chk_barcode_length CHECK (CHAR_LENGTH(barcode) BETWEEN 3 AND 50)
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: LABORATORY_CLASSES (CIS laboratory classes)
@@ -83,7 +87,7 @@ CREATE TABLE LABORATORY_CLASSES (
     time_slot VARCHAR(50),
     room_location VARCHAR(50),
     FOREIGN KEY (instructor_id) REFERENCES USERS(user_id) ON DELETE SET NULL
-);
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: CLASS_ENROLLMENT (Many-to-Many: STUDENTS to LABORATORY_CLASSES)
@@ -96,7 +100,7 @@ CREATE TABLE CLASS_ENROLLMENT (
     FOREIGN KEY (student_id) REFERENCES STUDENTS(student_id) ON DELETE CASCADE,
     FOREIGN KEY (class_id) REFERENCES LABORATORY_CLASSES(class_id) ON DELETE CASCADE,
     UNIQUE KEY unique_enrollment (student_id, class_id)
-);
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: EVENTS (Non-class activities: training, recruitment, exams, etc.)
@@ -116,8 +120,9 @@ CREATE TABLE EVENTS (
     approval_date DATETIME,
     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (organizer_id) REFERENCES USERS(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (approved_by) REFERENCES USERS(user_id) ON DELETE SET NULL
-);
+    FOREIGN KEY (approved_by) REFERENCES USERS(user_id) ON DELETE SET NULL,
+    CONSTRAINT chk_event_time CHECK (end_time IS NULL OR start_time IS NULL OR end_time > start_time)
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: BORROW_RECORDS (Main borrowing transactions)
@@ -138,8 +143,12 @@ CREATE TABLE BORROW_RECORDS (
     FOREIGN KEY (custodian_id) REFERENCES USERS(user_id) ON DELETE RESTRICT,
     FOREIGN KEY (class_id) REFERENCES LABORATORY_CLASSES(class_id) ON DELETE SET NULL,
     FOREIGN KEY (event_id) REFERENCES EVENTS(event_id) ON DELETE SET NULL,
-    CONSTRAINT chk_expected_return CHECK (expected_return_date >= CURDATE())
-);
+    CONSTRAINT chk_expected_return CHECK (expected_return_date >= DATE(borrow_date)),
+    CONSTRAINT chk_borrow_activity CHECK (
+        (borrow_type = 'CLASS_ACTIVITY' AND class_id IS NOT NULL AND event_id IS NULL)
+        OR (borrow_type = 'NON_CLASS_ACTIVITY' AND event_id IS NOT NULL AND class_id IS NULL)
+    )
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- TABLE: BORROW_DETAILS (Items borrowed in each transaction - Associative)
@@ -155,7 +164,7 @@ CREATE TABLE BORROW_DETAILS (
     FOREIGN KEY (borrow_id) REFERENCES BORROW_RECORDS(borrow_id) ON DELETE CASCADE,
     FOREIGN KEY (equipment_id) REFERENCES EQUIPMENT(equipment_id) ON DELETE RESTRICT,
     CONSTRAINT chk_quantity CHECK (quantity > 0)
-);
+) ENGINE=InnoDB;
 
 -- ============================================================================
 -- INDEXES for Performance Optimization
@@ -170,6 +179,90 @@ CREATE INDEX idx_borrow_status ON BORROW_RECORDS(return_status);
 CREATE INDEX idx_borrow_dates ON BORROW_RECORDS(borrow_date, actual_return_date);
 CREATE INDEX idx_class_enrollment_student ON CLASS_ENROLLMENT(student_id);
 CREATE INDEX idx_events_date ON EVENTS(event_date);
+
+-- ==========================================================================
+-- STORED FUNCTION AND PROCEDURE
+-- ==========================================================================
+DELIMITER //
+
+CREATE FUNCTION fn_equipment_status_count(p_status VARCHAR(20))
+RETURNS INT
+DETERMINISTIC
+READS SQL DATA
+BEGIN
+    DECLARE v_count INT;
+    SELECT COUNT(*) INTO v_count
+    FROM EQUIPMENT
+    WHERE status = p_status;
+    RETURN v_count;
+END//
+
+CREATE PROCEDURE sp_checkout_equipment(
+    IN p_borrower_id INT,
+    IN p_custodian_id INT,
+    IN p_borrow_type VARCHAR(20),
+    IN p_class_id INT,
+    IN p_event_id INT,
+    IN p_expected_return_date DATE,
+    IN p_notes TEXT,
+    IN p_equipment_id INT,
+    IN p_quantity INT,
+    IN p_condition_on_checkout VARCHAR(10),
+    OUT p_borrow_id INT
+)
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    INSERT INTO BORROW_RECORDS (
+        borrower_id,
+        custodian_id,
+        class_id,
+        event_id,
+        borrow_type,
+        expected_return_date,
+        notes
+    ) VALUES (
+        p_borrower_id,
+        p_custodian_id,
+        p_class_id,
+        p_event_id,
+        p_borrow_type,
+        p_expected_return_date,
+        p_notes
+    );
+
+    SET p_borrow_id = LAST_INSERT_ID();
+
+    INSERT INTO BORROW_DETAILS (
+        borrow_id,
+        equipment_id,
+        quantity,
+        condition_on_checkout,
+        condition_on_return,
+        damage_notes
+    ) VALUES (
+        p_borrow_id,
+        p_equipment_id,
+        p_quantity,
+        p_condition_on_checkout,
+        'NOT_RETURNED',
+        NULL
+    );
+
+    UPDATE EQUIPMENT
+    SET status = 'CHECKED_OUT'
+    WHERE equipment_id = p_equipment_id;
+
+    COMMIT;
+END//
+
+DELIMITER ;
 
 -- ============================================================================
 -- SAMPLE DATA INSERTION

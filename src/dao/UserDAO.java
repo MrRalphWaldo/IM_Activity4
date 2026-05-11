@@ -216,5 +216,39 @@ public class UserDAO {
         }
         return borrowers;
     }
-}
 
+    /**
+     * Get an active user by ID
+     * @param userId The user ID
+     * @return User object if active, null otherwise
+     */
+    public User getActiveUserById(int userId) {
+        String query = "SELECT user_id, username, password, first_name, last_name, email, phone, role, status " +
+                       "FROM USERS WHERE user_id = ? AND status = 'ACTIVE'";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, userId);
+            ResultSet rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                User user = new User(
+                    rs.getInt("user_id"),
+                    rs.getString("username"),
+                    rs.getString("first_name"),
+                    rs.getString("last_name"),
+                    rs.getString("email"),
+                    rs.getString("role"),
+                    rs.getString("status")
+                );
+                user.setPassword(rs.getString("password"));
+                user.setPhone(rs.getString("phone"));
+                return user;
+            }
+        } catch (SQLException e) {
+            System.err.println("Error retrieving active user by ID: " + e.getMessage());
+        }
+        return null;
+    }
+}

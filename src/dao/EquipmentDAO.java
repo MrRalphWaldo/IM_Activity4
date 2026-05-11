@@ -205,5 +205,69 @@ public class EquipmentDAO {
     public List<Equipment> getCheckedOutEquipment() {
         return getEquipmentByStatus("CHECKED_OUT");
     }
-}
 
+    /**
+     * Get equipment count by status using stored function
+     * @param status The status to count
+     * @return Number of equipment items with the given status
+     */
+    public int getEquipmentCountByStatus(String status) {
+        String call = "{? = call fn_equipment_status_count(?)}";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             CallableStatement cstmt = conn.prepareCall(call)) {
+
+            cstmt.registerOutParameter(1, Types.INTEGER);
+            cstmt.setString(2, status);
+            cstmt.execute();
+            return cstmt.getInt(1);
+        } catch (SQLException e) {
+            System.err.println("Error counting equipment by status: " + e.getMessage());
+        }
+        return 0;
+    }
+
+    /**
+     * Check if an equipment item is currently available
+     * @param equipmentId The equipment ID
+     * @return true if available, false otherwise
+     */
+    public boolean isEquipmentAvailable(int equipmentId) {
+        String query = "SELECT status FROM EQUIPMENT WHERE equipment_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, equipmentId);
+            ResultSet rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                return "AVAILABLE".equals(rs.getString("status"));
+            }
+        } catch (SQLException e) {
+            System.err.println("Error checking equipment availability: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Update equipment status
+     * @param equipmentId The equipment ID
+     * @param status The new status
+     * @return true if updated, false otherwise
+     */
+    public boolean updateEquipmentStatus(int equipmentId, String status) {
+        String query = "UPDATE EQUIPMENT SET status = ? WHERE equipment_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setString(1, status);
+            pstmt.setInt(2, equipmentId);
+            return pstmt.executeUpdate() > 0;
+        } catch (SQLException e) {
+            System.err.println("Error updating equipment status: " + e.getMessage());
+        }
+        return false;
+    }
+}

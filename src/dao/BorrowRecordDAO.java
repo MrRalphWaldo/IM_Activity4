@@ -266,5 +266,177 @@ public class BorrowRecordDAO {
         }
         return null;
     }
-}
 
+    /**
+     * Create a borrow record using the stored procedure
+     * @return generated borrow ID, or -1 if failed
+     */
+    public int createBorrowWithProcedure(int borrowerId, int custodianId, String borrowType,
+                                         Integer classId, Integer eventId, String expectedReturnDate,
+                                         String notes, int equipmentId, int quantity,
+                                         String conditionOnCheckout) {
+        String call = "{call sp_checkout_equipment(?,?,?,?,?,?,?,?,?,?,?)}";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             CallableStatement cstmt = conn.prepareCall(call)) {
+
+            cstmt.setInt(1, borrowerId);
+            cstmt.setInt(2, custodianId);
+            cstmt.setString(3, borrowType);
+            if (classId == null) {
+                cstmt.setNull(4, Types.INTEGER);
+            } else {
+                cstmt.setInt(4, classId);
+            }
+            if (eventId == null) {
+                cstmt.setNull(5, Types.INTEGER);
+            } else {
+                cstmt.setInt(5, eventId);
+            }
+            cstmt.setDate(6, Date.valueOf(expectedReturnDate));
+            cstmt.setString(7, notes);
+            cstmt.setInt(8, equipmentId);
+            cstmt.setInt(9, quantity);
+            cstmt.setString(10, conditionOnCheckout);
+            cstmt.registerOutParameter(11, Types.INTEGER);
+
+            cstmt.execute();
+            return cstmt.getInt(11);
+        } catch (SQLException e) {
+            System.err.println("Error creating borrow record: " + e.getMessage());
+        }
+        return -1;
+    }
+
+    /**
+     * Check if a class exists
+     */
+    public boolean classExists(int classId) {
+        String query = "SELECT 1 FROM LABORATORY_CLASSES WHERE class_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, classId);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next();
+        } catch (SQLException e) {
+            System.err.println("Error checking class existence: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Check if an event exists
+     */
+    public boolean eventExists(int eventId) {
+        String query = "SELECT 1 FROM EVENTS WHERE event_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, eventId);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next();
+        } catch (SQLException e) {
+            System.err.println("Error checking event existence: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Check if a borrow record exists
+     */
+    public boolean borrowRecordExists(int borrowId) {
+        String query = "SELECT 1 FROM BORROW_RECORDS WHERE borrow_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, borrowId);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next();
+        } catch (SQLException e) {
+            System.err.println("Error checking borrow record existence: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Get current return status for a borrow record
+     */
+    public String getBorrowRecordStatus(int borrowId) {
+        String query = "SELECT return_status FROM BORROW_RECORDS WHERE borrow_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, borrowId);
+            ResultSet rs = pstmt.executeQuery();
+            if (rs.next()) {
+                return rs.getString("return_status");
+            }
+        } catch (SQLException e) {
+            System.err.println("Error checking borrow record status: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Check if a borrow detail exists for a given borrow and equipment
+     */
+    public boolean borrowDetailExists(int borrowId, int equipmentId) {
+        String query = "SELECT 1 FROM BORROW_DETAILS WHERE borrow_id = ? AND equipment_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, borrowId);
+            pstmt.setInt(2, equipmentId);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next();
+        } catch (SQLException e) {
+            System.err.println("Error checking borrow detail existence: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Update condition on return for a borrowed item
+     */
+    public boolean updateBorrowDetailReturn(int borrowId, int equipmentId, String conditionOnReturn, String damageNotes) {
+        String query = "UPDATE BORROW_DETAILS SET condition_on_return = ?, damage_notes = ? " +
+                       "WHERE borrow_id = ? AND equipment_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setString(1, conditionOnReturn);
+            pstmt.setString(2, damageNotes);
+            pstmt.setInt(3, borrowId);
+            pstmt.setInt(4, equipmentId);
+            return pstmt.executeUpdate() > 0;
+        } catch (SQLException e) {
+            System.err.println("Error updating borrow detail return: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Mark a borrow record as returned
+     */
+    public boolean markBorrowRecordReturned(int borrowId) {
+        String query = "UPDATE BORROW_RECORDS SET actual_return_date = NOW(), return_status = 'RETURNED' " +
+                       "WHERE borrow_id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+            pstmt.setInt(1, borrowId);
+            return pstmt.executeUpdate() > 0;
+        } catch (SQLException e) {
+            System.err.println("Error updating borrow record return status: " + e.getMessage());
+        }
+        return false;
+    }
+}

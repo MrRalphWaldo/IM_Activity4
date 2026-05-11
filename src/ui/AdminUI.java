@@ -94,25 +94,14 @@ public class AdminUI {
      */
     private void viewEquipmentStatus() {
         System.out.println("\n========== EQUIPMENT STATUS SUMMARY ==========");
-        List<Equipment> allEquipment = equipmentDAO.getAllEquipment();
 
-        if (allEquipment.isEmpty()) {
-            System.out.println("No equipment found.");
-            return;
-        }
+        int available = equipmentDAO.getEquipmentCountByStatus("AVAILABLE");
+        int checkedOut = equipmentDAO.getEquipmentCountByStatus("CHECKED_OUT");
+        int maintenance = equipmentDAO.getEquipmentCountByStatus("MAINTENANCE");
+        int retired = equipmentDAO.getEquipmentCountByStatus("RETIRED");
+        int total = available + checkedOut + maintenance + retired;
 
-        int available = 0, checkedOut = 0, maintenance = 0, retired = 0;
-
-        for (Equipment eq : allEquipment) {
-            switch (eq.getStatus()) {
-                case "AVAILABLE": available++; break;
-                case "CHECKED_OUT": checkedOut++; break;
-                case "MAINTENANCE": maintenance++; break;
-                case "RETIRED": retired++; break;
-            }
-        }
-
-        System.out.println("Total Equipment:        " + allEquipment.size());
+        System.out.println("Total Equipment:        " + total);
         System.out.println("Available:              " + available);
         System.out.println("Checked Out:            " + checkedOut);
         System.out.println("Under Maintenance:      " + maintenance);

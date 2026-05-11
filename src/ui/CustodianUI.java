@@ -9,6 +9,8 @@ import models.User;
 
 import java.util.List;
 import java.util.Scanner;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 
 /**
  * Custodian UI - Interface for custodian operations
@@ -48,7 +50,9 @@ public class CustodianUI {
                     "6. View Unreturned Items\n" +
                     "7. View Borrow History by Class\n" +
                     "8. View Borrow Details by Borrower\n" +
-                    "9. Logout\n" +
+                    "9. Check Out Equipment\n" +
+                    "10. Log Return Items\n" +
+                    "11. Logout\n" +
                     "===========================================\n" +
                     "Select an option: ");
 
@@ -80,6 +84,12 @@ public class CustodianUI {
                     viewBorrowDetailsByBorrower();
                     break;
                 case "9":
+                    checkOutEquipment();
+                    break;
+                case "10":
+                    logReturnItems();
+                    break;
+                case "11":
                     running = false;
                     System.out.println("Logging out...");
                     break;
@@ -320,5 +330,194 @@ public class CustodianUI {
             System.out.println("Invalid Borrower ID format.");
         }
     }
-}
 
+    /**
+     * Check out equipment (full transaction cycle)
+     */
+    private void checkOutEquipment() {
+        System.out.println("\n========== CHECK OUT EQUIPMENT ==========");
+
+        int borrowerId = promptForInt("Enter Borrower ID: ");
+        User borrower = userDAO.getActiveUserById(borrowerId);
+        if (borrower == null || (!"BORROWER".equals(borrower.getRole()) && !"FACULTY".equals(borrower.getRole()))) {
+            System.out.println("Borrower not found or inactive.");
+            return;
+        }
+
+        String borrowType = promptBorrowType();
+        Integer classId = null;
+        Integer eventId = null;
+
+        if ("CLASS_ACTIVITY".equals(borrowType)) {
+            classId = promptForInt("Enter Class ID: ");
+            if (!borrowRecordDAO.classExists(classId)) {
+                System.out.println("Class not found.");
+                return;
+            }
+        } else {
+            eventId = promptForInt("Enter Event ID: ");
+            if (!borrowRecordDAO.eventExists(eventId)) {
+                System.out.println("Event not found.");
+                return;
+            }
+        }
+
+        int equipmentId = promptForInt("Enter Equipment ID: ");
+        Equipment equipment = equipmentDAO.getEquipmentById(equipmentId);
+        if (equipment == null) {
+            System.out.println("Equipment not found.");
+            return;
+        }
+        if (!"AVAILABLE".equals(equipment.getStatus())) {
+            System.out.println("Equipment is not available for checkout.");
+            return;
+        }
+
+        int quantity = promptForInt("Enter Quantity: ");
+        if (quantity <= 0) {
+            System.out.println("Quantity must be greater than zero.");
+            return;
+        }
+
+        String expectedReturnDate = promptForDate("Expected Return Date (YYYY-MM-DD): ");
+        String conditionOnCheckout = promptCondition("Condition on Checkout");
+        System.out.print("Notes (optional): ");
+        String notes = scanner.nextLine().trim();
+        if (notes.isEmpty()) {
+            notes = null;
+        }
+
+        int borrowId = borrowRecordDAO.createBorrowWithProcedure(
+                borrowerId,
+                currentUser.getUserId(),
+                borrowType,
+                classId,
+                eventId,
+                expectedReturnDate,
+                notes,
+                equipmentId,
+                quantity,
+                conditionOnCheckout
+        );
+
+        if (borrowId > 0) {
+            System.out.println("Checkout successful. New Borrow ID: " + borrowId);
+        } else {
+            System.out.println("Checkout failed. Please review the inputs and try again.");
+        }
+    }
+
+    /**
+     * Log returned items and update equipment status
+     */
+    private void logReturnItems() {
+        System.out.println("\n========== LOG RETURN ITEMS ==========");
+
+        int borrowId = promptForInt("Enter Borrow ID: ");
+        if (!borrowRecordDAO.borrowRecordExists(borrowId)) {
+            System.out.println("Borrow record not found.");
+            return;
+        }
+
+        String status = borrowRecordDAO.getBorrowRecordStatus(borrowId);
+        if (status == null || "RETURNED".equals(status)) {
+            System.out.println("Borrow record is already returned or invalid.");
+            return;
+        }
+
+        int equipmentId = promptForInt("Enter Equipment ID: ");
+        if (!borrowRecordDAO.borrowDetailExists(borrowId, equipmentId)) {
+            System.out.println("This equipment is not part of the borrow record.");
+            return;
+        }
+
+        String conditionOnReturn = promptCondition("Condition on Return");
+        System.out.print("Damage notes (optional): ");
+        String damageNotes = scanner.nextLine().trim();
+        if (damageNotes.isEmpty()) {
+            damageNotes = null;
+        }
+
+        boolean detailUpdated = borrowRecordDAO.updateBorrowDetailReturn(
+                borrowId,
+                equipmentId,
+                conditionOnReturn,
+                damageNotes
+        );
+
+        boolean recordUpdated = borrowRecordDAO.markBorrowRecordReturned(borrowId);
+
+        String equipmentStatus = "DAMAGED".equals(conditionOnReturn) ? "MAINTENANCE" : "AVAILABLE";
+        boolean equipmentUpdated = equipmentDAO.updateEquipmentStatus(equipmentId, equipmentStatus);
+
+        if (detailUpdated && recordUpdated && equipmentUpdated) {
+            System.out.println("Return logged successfully.");
+        } else {
+            System.out.println("Return update incomplete. Please verify the record.");
+        }
+    }
+
+    private int promptForInt(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String input = scanner.nextLine().trim();
+            try {
+                return Integer.parseInt(input);
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid number format. Please try again.");
+            }
+        }
+    }
+
+    private String promptForDate(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String input = scanner.nextLine().trim();
+            try {
+                LocalDate date = LocalDate.parse(input);
+                if (date.isBefore(LocalDate.now())) {
+                    System.out.println("Date must be today or later.");
+                    continue;
+                }
+                return date.toString();
+            } catch (DateTimeParseException e) {
+                System.out.println("Invalid date format. Use YYYY-MM-DD.");
+            }
+        }
+    }
+
+    private String promptBorrowType() {
+        System.out.println("Select Borrow Type:");
+        System.out.println("1. CLASS_ACTIVITY");
+        System.out.println("2. NON_CLASS_ACTIVITY");
+        System.out.print("Select an option: ");
+
+        String choice = scanner.nextLine().trim();
+        if ("1".equals(choice)) {
+            return "CLASS_ACTIVITY";
+        }
+        if ("2".equals(choice)) {
+            return "NON_CLASS_ACTIVITY";
+        }
+        System.out.println("Invalid option. Defaulting to CLASS_ACTIVITY.");
+        return "CLASS_ACTIVITY";
+    }
+
+    private String promptCondition(String label) {
+        System.out.println(label + ":");
+        System.out.println("1. GOOD");
+        System.out.println("2. FAIR");
+        System.out.println("3. DAMAGED");
+        System.out.print("Select an option: ");
+
+        String choice = scanner.nextLine().trim();
+        switch (choice) {
+            case "1": return "GOOD";
+            case "2": return "FAIR";
+            case "3": return "DAMAGED";
+            default:
+                System.out.println("Invalid option. Defaulting to GOOD.");
+                return "GOOD";
+        }
+    }
+}
